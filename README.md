@@ -91,5 +91,66 @@ The AQI derivation from PM2.5 uses simplified breakpoints modelled on India's CP
 - SQLite is a stand-in. Small differences from BigQuery SQL exist, so always confirm queries in BigQuery.
 - Add a dashboard (Looker Studio) on top of the BigQuery table.
 
+## How I ran it in Google Cloud Shell
+
+Everything below was run in Cloud Shell (the `>_` icon in the Google Cloud console). Cloud Shell already has Python, git and gcloud installed and is already logged in, so no key file is needed.
+
+**1. Set the project**
+```bash
+gcloud config set project air-quality-pipeline-511610
+gcloud auth application-default set-quota-project air-quality-pipeline-511610
+```
+
+**2. Enable the APIs**
+```bash
+gcloud services enable bigquery.googleapis.com storage.googleapis.com
+```
+
+**3. Create the Cloud Storage bucket (data lake)**
+```bash
+gcloud storage buckets create gs://air-quality-pipeline-511610-lake --location=US
+```
+
+**4. Get the code**
+```bash
+git clone https://github.com/MohanNellore/gcp-air-quality-pipeline.git
+cd gcp-air-quality-pipeline
+```
+
+**5. Install the dependencies**
+```bash
+pip install -r requirements.txt
+```
+
+**6. Set the configuration**
+```bash
+export GCP_PROJECT_ID=air-quality-pipeline-511610
+export BQ_DATASET=air_quality
+export BQ_TABLE=daily_air_quality
+export BQ_LOCATION=US
+export GCS_BUCKET=air-quality-pipeline-511610-lake
+```
+
+**7. Run the pipeline**
+```bash
+python run_pipeline.py --mode gcp
+```
+This runs five steps: Extract, Transform, Quality checks, Load (Cloud Storage and BigQuery), and Analyse.
+
+**8. Check the result (optional)**
+```bash
+bq query --use_legacy_sql=false \
+'SELECT city, ROUND(AVG(pm25), 2) AS avg_pm25
+ FROM `air-quality-pipeline-511610.air_quality.daily_air_quality`
+ GROUP BY city ORDER BY avg_pm25 DESC'
+```
+
+**9. Clean up so nothing is billed**
+```bash
+bq rm -r -f -d air-quality-pipeline-511610:air_quality
+gcloud storage rm --recursive gs://air-quality-pipeline-511610-lake
+```
+
 ## License
 MIT
+
