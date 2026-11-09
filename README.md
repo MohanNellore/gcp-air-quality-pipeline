@@ -1,6 +1,6 @@
 # GCP Air-Quality Batch Data Pipeline
 
-A beginner-friendly **data engineering project on Google Cloud**. It takes a messy raw CSV of daily city air-quality readings, cleans and validates it with **Python (Pandas)**, stages it in **Cloud Storage**, loads it into a **partitioned and clustered BigQuery table**, and answers business questions with **SQL**.
+A beginner-friendly **data engineering project on Google Cloud**. It takes a messy raw CSV of daily city air-quality readings, cleans and validates it with **Python (Pandas)**, stages it in **Cloud Storage**, and loads it into a **partitioned and clustered BigQuery table**.
 
 It also runs fully **locally** (SQLite instead of BigQuery), so you can develop and test without a cloud account.
 
@@ -23,12 +23,10 @@ data/raw/air_quality_raw.csv
    [4] Load ──┬─ local mode: SQLite
               └─ gcp mode:   Cloud Storage (raw/ + processed/) ──> BigQuery
                               table partitioned by reading_date, clustered by city
-        │
-   [5] Analyse ─ run the SQL files in sql/ and save results as CSV
 ```
 
 ## Skills shown
-Python ETL with Pandas · data cleaning and validation · data-quality checks · Google Cloud Storage · BigQuery (partitioning, clustering, explicit schema, idempotent loads) · analytical SQL (CTEs, window functions, RANK) · configuration through environment variables · unit tests · Git
+Python ETL with Pandas · data cleaning and validation · data-quality checks · Google Cloud Storage · BigQuery (partitioning, clustering, explicit schema, idempotent loads) · configuration through environment variables · unit tests · Git
 
 ## Project structure
 ```
@@ -37,12 +35,10 @@ Python ETL with Pandas · data cleaning and validation · data-quality checks ·
 │   ├── extract.py               # read raw CSV
 │   ├── transform.py             # cleaning rules + quality counters
 │   ├── quality.py               # data-quality gate
-│   ├── load_gcp.py              # Cloud Storage upload + BigQuery load + query
+│   ├── load_gcp.py              # Cloud Storage upload + BigQuery load
 │   ├── local_warehouse.py       # SQLite stand-in for BigQuery
-│   ├── analytics.py             # runs the .sql files
-│   ├── pipeline.py              # orchestrates the five steps
+│   ├── pipeline.py              # orchestrates the four steps
 │   └── config.py                # settings from environment variables
-├── sql/                         # 5 analytical queries (run on SQLite and BigQuery)
 ├── scripts/generate_sample_data.py
 ├── data/raw/air_quality_raw.csv # SYNTHETIC sample data with deliberate problems
 ├── tests/                       # unit tests
@@ -59,7 +55,7 @@ pip install -r requirements.txt
 python run_pipeline.py --mode local
 python -m unittest discover -s tests -v
 ```
-You will see a data-quality report and the results of five SQL queries. Files are saved in `outputs/`.
+You will see a data-quality report. The clean CSV and `quality_report.json` are saved in `outputs/`.
 
 ## Run it on Google Cloud
 Follow [docs/GCP_SETUP.md](docs/GCP_SETUP.md), then:
@@ -81,14 +77,14 @@ The AQI derivation from PM2.5 uses simplified breakpoints modelled on India's CP
 | Partition by date, cluster by city | Cheaper, faster queries that filter by date or city |
 | Quality gate before loading | Bad data never reaches the warehouse |
 | Every cleaning rule counts its changes | The report shows exactly what was fixed |
-| Portable SQL + SQLite local mode | Logic can be tested without cloud access |
+| SQLite local mode | Extract, transform and quality checks can be tested without cloud access |
 | Credentials via `gcloud auth application-default login` | No keys stored in the repo |
 
 ## Limitations and next steps
 - Batch only. Add incremental loads (append new days, then `MERGE`).
 - CSV staging. Parquet would be smaller and keep types.
 - Run on demand. Schedule with Cloud Scheduler plus Cloud Run, or orchestrate with Cloud Composer (Airflow).
-- SQLite is a stand-in. Small differences from BigQuery SQL exist, so always confirm queries in BigQuery.
+- SQLite is only a stand-in for the BigQuery load step in local mode. Always confirm the real load in BigQuery.
 - Add a dashboard (Looker Studio) on top of the BigQuery table.
 
 ## How I ran it in Google Cloud Shell
@@ -135,7 +131,7 @@ export GCS_BUCKET=air-quality-pipeline-511610-lake
 ```bash
 python run_pipeline.py --mode gcp
 ```
-This runs five steps: Extract, Transform, Quality checks, Load (Cloud Storage and BigQuery), and Analyse.
+This runs four steps: Extract, Transform, Quality checks, and Load (Cloud Storage and BigQuery).
 
 **8. Check the result (optional)**
 ```bash

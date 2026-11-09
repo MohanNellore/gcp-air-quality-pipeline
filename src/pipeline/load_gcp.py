@@ -51,13 +51,3 @@ def load_to_bigquery(csv_path: str, project_id: str, dataset: str, table: str,
             job = client.load_table_from_file(f, table_id, job_config=_job_config())
     job.result()  # wait for the load job to finish (raises if it failed)
     return client.get_table(table_id).num_rows
-
-
-def run_bigquery_query(sql: str, project_id: str, location: str = "US"):
-    """Run a SQL query in BigQuery and return the result as a pandas DataFrame."""
-    import pandas as pd
-    from google.cloud import bigquery
-
-    client = bigquery.Client(project=project_id, location=location)
-    rows = client.query(sql).result()
-    return pd.DataFrame([dict(row.items()) for row in rows])

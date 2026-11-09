@@ -49,7 +49,7 @@ GCS_BUCKET=your-bucket-name     # leave empty to skip Cloud Storage
 pip install -r requirements.txt
 python run_pipeline.py --mode gcp
 ```
-Expected: the five steps print, then query results appear. If you see a permissions error, check that you are logged in to the right account (`gcloud auth list`) and that the Project ID is correct.
+Expected: the four steps print, then the data-quality report appears. If you see a permissions error, check that you are logged in to the right account (`gcloud auth list`) and that the Project ID is correct.
 
 ## 8. Check the result in the console
 1. Open **BigQuery**, then in the Explorer panel open your project -> `air_quality` -> `daily_air_quality`.

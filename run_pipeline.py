@@ -25,10 +25,7 @@ def main() -> None:
     for key in ("rows_raw", "missing_city_dropped", "invalid_dates_dropped", "duplicates_removed",
                 "negative_values_nulled", "empty_rows_dropped", "aqi_derived_from_pm25", "rows_clean"):
         print(f"{key:26} {r[key]}")
-    print(f"\nResults saved in ./{a.output_dir}/ (quality_report.json, query_results/*.csv)")
-    for name, df in result["results"].items():
-        print(f"\n--- {name} ---")
-        print(df.head(8).to_string(index=False))
+    print(f"\nResults saved in ./{a.output_dir}/ (daily_air_quality_clean.csv, quality_report.json)")
 
 
 if __name__ == "__main__":
