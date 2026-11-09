@@ -1,51 +1,80 @@
-"""Orchestrates: extract -> transform -> quality gate -> load."""
+"""The pipeline manager: runs extract -> transform -> quality gate -> load, in that order."""
 import json
-from pathlib import Path
+import os
 
-from . import local_warehouse
-from .config import Settings
+from .config import load_settings
 from .extract import read_raw_csv
+from .local_warehouse import load_dataframe
 from .quality import assert_quality
 from .transform import clean
 
 
-def run(input_path: str, mode: str = "local", out_dir: str = "outputs", settings: Settings | None = None) -> dict:
-    settings = settings or Settings.from_env()
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+def run(input_path, mode="local", out_dir="outputs", settings=None):
+    """Run the whole pipeline and return the data-quality report (a dictionary).
 
-    print(f"[1/4] Extract   reading {input_path}")
+    input_path: the raw CSV file
+    mode:       "local" (SQLite on this computer) or "gcp" (Cloud Storage + BigQuery)
+    out_dir:    the folder where the output files are saved
+    settings:   a dictionary from config.load_settings(). If not given, it is read from the environment.
+    """
+    if settings is None:
+        settings = load_settings()
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ----- Step 1: Extract -----
+    print("[1/4] Extract   reading " + input_path)
     raw = read_raw_csv(input_path)
 
+    # ----- Step 2: Transform -----
     print("[2/4] Transform cleaning and enriching")
     df, report = clean(raw)
-    processed_csv = out / "daily_air_quality_clean.csv"
-    df.to_csv(processed_csv, index=False)
+    clean_csv_path = os.path.join(out_dir, "daily_air_quality_clean.csv")
+    df.to_csv(clean_csv_path, index=False)
 
+    # ----- Step 3: Quality gate (raises an error and stops here if a check fails) -----
     print("[3/4] Quality   running data-quality checks")
-    report["quality_checks"] = [{"check": n, "passed": ok} for n, ok in assert_quality(df)]
-    (out / "quality_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    check_results = assert_quality(df)
+    report["quality_checks"] = []
+    for name, passed in check_results:
+        report["quality_checks"].append({"check": name, "passed": passed})
 
+    report_path = os.path.join(out_dir, "quality_report.json")
+    with open(report_path, "w", encoding="utf-8") as file:
+        file.write(json.dumps(report, indent=2))
+
+    # ----- Step 4: Load -----
     if mode == "local":
         print("[4/4] Load      loading into local SQLite (BigQuery stand-in)")
-        local_warehouse.load_dataframe(df, settings.bq_table).close()
+        connection = load_dataframe(df, settings["bq_table"])
+        connection.close()
+
     elif mode == "gcp":
+        # Imported here so that local mode works without the Google libraries installed
         from . import load_gcp
 
-        if not settings.project_id:
+        if settings["project_id"] == "":
             raise ValueError("Set GCP_PROJECT_ID (see .env.example) before running with --mode gcp")
+
+        bucket = settings["gcs_bucket"]
         gcs_uri = None
-        if settings.gcs_bucket:
-            print(f"[4/4] Load      uploading to gs://{settings.gcs_bucket} and loading into BigQuery")
-            gcs_uri = load_gcp.upload_to_gcs(str(processed_csv), settings.gcs_bucket,
-                                             "processed/daily_air_quality_clean.csv", settings.project_id)
-            load_gcp.upload_to_gcs(input_path, settings.gcs_bucket, "raw/" + Path(input_path).name, settings.project_id)
+
+        if bucket != "":
+            print("[4/4] Load      uploading to gs://" + bucket + " and loading into BigQuery")
+            # The clean file goes to processed/ and the original file goes to raw/
+            gcs_uri = load_gcp.upload_to_gcs(
+                clean_csv_path, bucket, "processed/daily_air_quality_clean.csv", settings["project_id"])
+            load_gcp.upload_to_gcs(
+                input_path, bucket, "raw/" + os.path.basename(input_path), settings["project_id"])
         else:
             print("[4/4] Load      loading into BigQuery (no bucket configured, skipping Cloud Storage)")
-        rows = load_gcp.load_to_bigquery(str(processed_csv), settings.project_id, settings.bq_dataset,
-                                         settings.bq_table, settings.bq_location, gcs_uri)
-        report["bigquery_rows"] = int(rows)
+
+        rows_in_table = load_gcp.load_to_bigquery(
+            clean_csv_path, settings["project_id"], settings["bq_dataset"],
+            settings["bq_table"], settings["bq_location"], gcs_uri)
+        report["bigquery_rows"] = int(rows_in_table)
+
     else:
         raise ValueError("mode must be 'local' or 'gcp'")
 
-    return {"report": report}
+    return report

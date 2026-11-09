@@ -1,13 +1,15 @@
-"""Local stand-in for the BigQuery load step so the whole project runs (and is tested) with no cloud account.
+"""A small local stand-in for the BigQuery load step, so the project runs with no cloud account.
 
-SQLite ships with Python.
+SQLite comes with Python, so nothing extra needs to be installed.
 """
 import sqlite3
 
-import pandas as pd
 
+def load_dataframe(df, table, db_path=":memory:"):
+    """Save the table into a SQLite database and return the connection.
 
-def load_dataframe(df: pd.DataFrame, table: str, db_path: str = ":memory:") -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
-    df.to_sql(table, conn, if_exists="replace", index=False)
-    return conn
+    ":memory:" means the database lives in memory only and disappears when the program ends.
+    """
+    connection = sqlite3.connect(db_path)
+    df.to_sql(table, connection, if_exists="replace", index=False)
+    return connection

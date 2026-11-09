@@ -1,13 +1,16 @@
-"""Step 2 - TRANSFORM: clean, standardise and enrich the data with Pandas.
+"""Step 2 - TRANSFORM: clean the data and add useful new columns, using pandas.
 
-Every cleaning rule counts what it changed, so the pipeline can print a data-quality report.
+The main function is clean(). It fixes the data one rule at a time and counts
+how many rows each rule changed. Those counts become the data-quality report.
 """
 import numpy as np
 import pandas as pd
 
+# The six pollution columns
 POLLUTANTS = ["pm25", "pm10", "no2", "so2", "co", "o3"]
 
-# Final table layout. Keep this in sync with the BigQuery schema in load_gcp.py
+# The final table: (column name, BigQuery column type).
+# Keep this the same as the schema that load_gcp.py sends to BigQuery.
 SCHEMA = [
     ("city", "STRING"),
     ("reading_date", "DATE"),
@@ -24,39 +27,80 @@ SCHEMA = [
     ("reading_month", "INTEGER"),
     ("season", "STRING"),
 ]
-FINAL_COLUMNS = [name for name, _ in SCHEMA]
 
-CITY_ALIASES = {"bangalore": "Bengaluru", "bombay": "Mumbai", "madras": "Chennai", "calcutta": "Kolkata"}
+# Just the column names, in the same order as SCHEMA
+FINAL_COLUMNS = []
+for column_name, column_type in SCHEMA:
+    FINAL_COLUMNS.append(column_name)
 
-# Simplified PM2.5 -> AQI breakpoints (low, high, aqi_low, aqi_high), modelled on India's CPCB scale
-PM25_BREAKPOINTS = [(0, 30, 0, 50), (30, 60, 50, 100), (60, 90, 100, 200),
-                    (90, 120, 200, 300), (120, 250, 300, 400), (250, 380, 400, 500)]
-AQI_BUCKETS = [(50, "Good"), (100, "Satisfactory"), (200, "Moderate"),
-               (300, "Poor"), (400, "Very Poor")]
+# Old city names and the new name we want instead (keys must be lowercase)
+CITY_ALIASES = {
+    "bangalore": "Bengaluru",
+    "bombay": "Mumbai",
+    "madras": "Chennai",
+    "calcutta": "Kolkata",
+}
+
+# PM2.5 -> AQI conversion table. Each row means:
+# (PM2.5 from, PM2.5 to, AQI from, AQI to)
+# It is a simplified version of India's CPCB scale, made for learning.
+PM25_BREAKPOINTS = [
+    (0, 30, 0, 50),
+    (30, 60, 50, 100),
+    (60, 90, 100, 200),
+    (90, 120, 200, 300),
+    (120, 250, 300, 400),
+    (250, 380, 400, 500),
+]
+
+# AQI label table. Each row means: (highest AQI for this label, label)
+AQI_BUCKETS = [
+    (50, "Good"),
+    (100, "Satisfactory"),
+    (200, "Moderate"),
+    (300, "Poor"),
+    (400, "Very Poor"),
+]
 
 
-def pm25_to_aqi(value: float) -> float:
-    """Linear interpolation inside the matching breakpoint band."""
-    if value is None or pd.isna(value) or value < 0:
+# ---------------------------------------------------------------------------
+# Small helper functions. Each one works on a single value.
+# ---------------------------------------------------------------------------
+
+def pm25_to_aqi(pm25):
+    """Turn a PM2.5 number into an AQI score.
+
+    We find which row of PM25_BREAKPOINTS the number falls in, then calculate
+    the position inside that row. Example: PM2.5 = 45 is in the row 30-60,
+    which maps to AQI 50-100, so the answer is 75.
+    """
+    if pd.isna(pm25) or pm25 < 0:
         return np.nan
-    if value >= 380:
-        return 500.0
-    for lo, hi, a_lo, a_hi in PM25_BREAKPOINTS:
-        if value <= hi:
-            return round((a_hi - a_lo) / (hi - lo) * (value - lo) + a_lo, 1)
+
+    for pm_low, pm_high, aqi_low, aqi_high in PM25_BREAKPOINTS:
+        if pm25 <= pm_high:
+            steps_per_unit = (aqi_high - aqi_low) / (pm_high - pm_low)
+            aqi = steps_per_unit * (pm25 - pm_low) + aqi_low
+            return round(aqi, 1)
+
+    # PM2.5 above the last row is the worst possible score
     return 500.0
 
 
-def aqi_to_bucket(value: float):
-    if value is None or pd.isna(value):
+def aqi_to_bucket(aqi):
+    """Turn an AQI score into a label such as 'Good' or 'Poor'."""
+    if pd.isna(aqi):
         return None
-    for upper, label in AQI_BUCKETS:
-        if value <= upper:
+
+    for highest_aqi, label in AQI_BUCKETS:
+        if aqi <= highest_aqi:
             return label
+
     return "Severe"
 
 
-def month_to_season(month: int) -> str:
+def month_to_season(month):
+    """Turn a month number (1-12) into a season name."""
     if month in (12, 1, 2):
         return "Winter"
     if month in (3, 4, 5):
@@ -66,78 +110,188 @@ def month_to_season(month: int) -> str:
     return "Post-monsoon"
 
 
-def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """'PM2.5' -> 'pm25', 'AQI_Bucket' -> 'aqi_bucket', 'Date' -> 'reading_date'."""
-    out = df.copy()
-    out.columns = [c.strip().lower().replace(".", "").replace(" ", "_") for c in out.columns]
-    return out.rename(columns={"date": "reading_date"})
+def tidy_city_name(name):
+    """Return a clean city name, or None if there is no usable name."""
+    if pd.isna(name):
+        return None
+
+    name = str(name).strip()
+    if name == "":
+        return None
+
+    # Old names are replaced by the new name (Bangalore -> Bengaluru).
+    # Other names just get a capital first letter (delhi -> Delhi).
+    if name.lower() in CITY_ALIASES:
+        return CITY_ALIASES[name.lower()]
+    return name.title()
 
 
-def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Return (clean dataframe, quality report)."""
-    df = standardize_columns(raw)
-    for needed in ("city", "reading_date"):
-        if needed not in df.columns:
-            raise ValueError(f"Required column missing in raw data: {needed}")
-    report: dict = {"rows_raw": int(len(df))}
+# ---------------------------------------------------------------------------
+# Cleaning steps. Each one takes the table, fixes one thing, and returns it.
+# ---------------------------------------------------------------------------
 
-    # Optional columns that are absent become empty instead of crashing the run
-    for col in POLLUTANTS + ["aqi", "aqi_bucket"]:
-        if col not in df.columns:
-            df[col] = np.nan
+def standardize_columns(df):
+    """Make the column names tidy.
 
-    # 1. City names: trim, fix case, map old names (Bangalore -> Bengaluru)
-    city = df["city"].astype(object).where(df["city"].notna(), None)
-    city = city.map(lambda x: x.strip() if isinstance(x, str) else x)
-    missing_city = city.isna() | (city == "")
-    report["missing_city_dropped"] = int(missing_city.sum())
-    df = df.loc[~missing_city].copy()
-    df["city"] = city[~missing_city].map(lambda x: CITY_ALIASES.get(x.lower(), x.title()))
+    'PM2.5' becomes 'pm25', 'AQI_Bucket' becomes 'aqi_bucket', 'Date' becomes 'reading_date'.
+    """
+    df = df.copy()
 
-    # 2. Dates: must be YYYY-MM-DD, anything else is dropped
-    parsed = pd.to_datetime(df["reading_date"], format="%Y-%m-%d", errors="coerce")
-    report["invalid_dates_dropped"] = int(parsed.isna().sum())
-    df = df.loc[parsed.notna()].copy()
-    df["reading_date"] = parsed[parsed.notna()]
+    new_names = []
+    for name in df.columns:
+        name = name.strip().lower()
+        name = name.replace(".", "")
+        name = name.replace(" ", "_")
+        new_names.append(name)
+    df.columns = new_names
 
-    # 3. Numbers: text -> float; negative concentrations are impossible, so set them to empty
-    negatives = 0
-    for col in POLLUTANTS + ["aqi"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        neg = df[col] < 0
-        negatives += int(neg.sum())
-        df.loc[neg, col] = np.nan
-    report["negative_values_nulled"] = negatives
+    df = df.rename(columns={"date": "reading_date"})
+    return df
 
-    # 4. Duplicates: one reading per city per day
+
+def fix_city_names(df, report):
+    """Rule 1: tidy the city names and drop the rows that have no city."""
+    df["city"] = df["city"].apply(tidy_city_name)
+
+    no_city = df["city"].isna()
+    report["missing_city_dropped"] = int(no_city.sum())
+
+    df = df[~no_city].copy()
+    return df
+
+
+def fix_dates(df, report):
+    """Rule 2: a date must look like 2024-01-15. Rows with any other date are dropped."""
+    parsed_dates = pd.to_datetime(df["reading_date"], format="%Y-%m-%d", errors="coerce")
+
+    bad_date = parsed_dates.isna()
+    report["invalid_dates_dropped"] = int(bad_date.sum())
+
+    df = df[~bad_date].copy()
+    df["reading_date"] = parsed_dates[~bad_date]
+    return df
+
+
+def fix_numbers(df, report):
+    """Rule 3: change the text into numbers.
+
+    A pollution value below zero is impossible, so we replace it with an
+    empty value (NaN). The row itself is kept.
+    """
+    negatives_found = 0
+
+    for column in POLLUTANTS + ["aqi"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+        is_negative = df[column] < 0
+        negatives_found = negatives_found + int(is_negative.sum())
+        df.loc[is_negative, column] = np.nan
+
+    report["negative_values_nulled"] = negatives_found
+    return df
+
+
+def remove_duplicates(df, report):
+    """Rule 4: keep only one reading for each city on each day."""
     df = df.sort_values(["city", "reading_date"]).reset_index(drop=True)
-    dup = df.duplicated(subset=["city", "reading_date"], keep="first")
-    report["duplicates_removed"] = int(dup.sum())
-    df = df.loc[~dup].copy()
 
-    # 5. Rows with no pollutant measurement at all carry no information
-    empty = df[POLLUTANTS].isna().all(axis=1)
-    report["empty_rows_dropped"] = int(empty.sum())
-    df = df.loc[~empty].copy()
+    is_duplicate = df.duplicated(subset=["city", "reading_date"], keep="first")
+    report["duplicates_removed"] = int(is_duplicate.sum())
 
-    # 6. Fill a missing AQI from PM2.5, remember where each AQI came from, rebuild the bucket
-    derived = df["aqi"].isna() & df["pm25"].notna()
-    df.loc[derived, "aqi"] = df.loc[derived, "pm25"].map(pm25_to_aqi)
-    df["aqi_source"] = np.where(df["aqi"].isna(), None, np.where(derived, "derived_from_pm25", "reported"))
-    df["aqi_bucket"] = df["aqi"].map(aqi_to_bucket)
-    report["aqi_derived_from_pm25"] = int(derived.sum())
+    df = df[~is_duplicate].copy()
+    return df
 
-    # 7. Features for analysis
+
+def remove_empty_rows(df, report):
+    """Rule 5: drop rows that have none of the six pollution values. They carry no information."""
+    has_no_data = df[POLLUTANTS].isna().all(axis=1)
+    report["empty_rows_dropped"] = int(has_no_data.sum())
+
+    df = df[~has_no_data].copy()
+    return df
+
+
+def fill_aqi(df, report):
+    """Rule 6: fill a missing AQI from PM2.5, and rebuild the AQI label.
+
+    The new column aqi_source tells us where each AQI came from:
+    'reported' (it was in the file) or 'derived_from_pm25' (we calculated it).
+    """
+    # Rows where AQI is empty but PM2.5 is available
+    can_derive = df["aqi"].isna() & df["pm25"].notna()
+    df.loc[can_derive, "aqi"] = df.loc[can_derive, "pm25"].apply(pm25_to_aqi)
+
+    df["aqi_source"] = "reported"
+    df.loc[can_derive, "aqi_source"] = "derived_from_pm25"
+    df.loc[df["aqi"].isna(), "aqi_source"] = None  # no AQI at all, so no source
+
+    df["aqi_bucket"] = df["aqi"].apply(aqi_to_bucket)
+
+    report["aqi_derived_from_pm25"] = int(can_derive.sum())
+    return df
+
+
+def add_features(df):
+    """Rule 7: add year, month and season columns, and tidy the formats."""
     df["reading_year"] = df["reading_date"].dt.year.astype(int)
     df["reading_month"] = df["reading_date"].dt.month.astype(int)
-    df["season"] = df["reading_month"].map(month_to_season)
-    df["reading_date"] = df["reading_date"].dt.strftime("%Y-%m-%d")
-    for col in POLLUTANTS + ["aqi"]:
-        df[col] = df[col].round(2)
+    df["season"] = df["reading_month"].apply(month_to_season)
 
+    # Turn the date into text like 2024-01-15, which BigQuery reads as a DATE
+    df["reading_date"] = df["reading_date"].dt.strftime("%Y-%m-%d")
+
+    # Keep two digits after the decimal point
+    for column in POLLUTANTS + ["aqi"]:
+        df[column] = df[column].round(2)
+
+    return df
+
+
+# ---------------------------------------------------------------------------
+# The main function
+# ---------------------------------------------------------------------------
+
+def clean(raw):
+    """Clean the raw table.
+
+    Returns two things: the clean table, and a report (a dictionary of counts).
+    """
+    df = standardize_columns(raw)
+
+    # City and date are required. Without them we cannot continue.
+    for column in ["city", "reading_date"]:
+        if column not in df.columns:
+            raise ValueError("Required column missing in raw data: " + column)
+
+    report = {"rows_raw": int(len(df))}
+
+    # If a pollution column is missing from the file, create it empty
+    # instead of crashing.
+    for column in POLLUTANTS + ["aqi", "aqi_bucket"]:
+        if column not in df.columns:
+            df[column] = np.nan
+
+    df = fix_city_names(df, report)
+    df = fix_dates(df, report)
+    df = fix_numbers(df, report)
+    df = remove_duplicates(df, report)
+    df = remove_empty_rows(df, report)
+    df = fill_aqi(df, report)
+    df = add_features(df)
+
+    # Keep only the final columns, in the right order
     df = df[FINAL_COLUMNS].reset_index(drop=True)
+
+    # Finish the report
     report["rows_clean"] = int(len(df))
     report["cities"] = sorted(df["city"].unique().tolist())
     report["date_range"] = [df["reading_date"].min(), df["reading_date"].max()]
-    report["null_counts"] = {c: int(v) for c, v in df.isna().sum().items() if v}
+
+    # Count the empty values left in each column (only columns that have some)
+    null_counts = {}
+    for column, count in df.isna().sum().items():
+        if count > 0:
+            null_counts[column] = int(count)
+    report["null_counts"] = null_counts
+
     return df, report

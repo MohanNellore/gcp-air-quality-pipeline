@@ -1,41 +1,51 @@
+"""Test the whole pipeline in local mode (no cloud account needed).
+
+Run it with:  python -m unittest discover -s tests -v
+"""
+import os
 import sys
 import tempfile
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+# Tell Python where to find our code (the src and scripts folders)
+project_folder = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(project_folder, "src"))
+sys.path.insert(0, os.path.join(project_folder, "scripts"))
 
-from generate_sample_data import build  # noqa: E402
-from pipeline.pipeline import run  # noqa: E402
+from generate_sample_data import build
+from pipeline.pipeline import run
 
 
 class LocalPipelineTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.tmp = tempfile.TemporaryDirectory()
-        raw = Path(cls.tmp.name) / "raw.csv"
-        build(seed=7, start="2022-01-01", end="2022-12-31").to_csv(raw, index=False)
-        cls.result = run(str(raw), mode="local", out_dir=str(Path(cls.tmp.name) / "out"))
-        cls.out = Path(cls.tmp.name) / "out"
+    def setUp(self):
+        # This runs before every test: make messy data in a temporary folder and run the pipeline on it
+        self.temp_folder = tempfile.TemporaryDirectory()
+        raw_path = os.path.join(self.temp_folder.name, "raw.csv")
+        self.out_folder = os.path.join(self.temp_folder.name, "out")
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.tmp.cleanup()
+        raw_table = build(seed=7, start="2022-01-01", end="2022-12-31")
+        raw_table.to_csv(raw_path, index=False)
 
-    def test_output_files_written(self):
-        self.assertTrue((self.out / "quality_report.json").exists())
-        self.assertTrue((self.out / "daily_air_quality_clean.csv").exists())
+        self.report = run(raw_path, mode="local", out_dir=self.out_folder)
 
-    def test_cleaning_removed_problems(self):
-        r = self.result["report"]
-        self.assertGreater(r["rows_raw"], r["rows_clean"])
-        self.assertEqual(len(r["cities"]), 6)  # name variants merged into 6 cities
+    def tearDown(self):
+        # This runs after every test: delete the temporary folder
+        self.temp_folder.cleanup()
+
+    def test_output_files_are_written(self):
+        self.assertTrue(os.path.exists(os.path.join(self.out_folder, "quality_report.json")))
+        self.assertTrue(os.path.exists(os.path.join(self.out_folder, "daily_air_quality_clean.csv")))
+
+    def test_cleaning_removed_the_problems(self):
+        self.assertGreater(self.report["rows_raw"], self.report["rows_clean"])
+        # The messy name variants (bangalore, DELHI, ...) are merged into 6 cities
+        self.assertEqual(len(self.report["cities"]), 6)
 
     def test_all_quality_checks_passed(self):
-        checks = self.result["report"]["quality_checks"]
-        self.assertTrue(checks)
-        self.assertTrue(all(c["passed"] for c in checks))
+        checks = self.report["quality_checks"]
+        self.assertGreater(len(checks), 0)
+        for check in checks:
+            self.assertTrue(check["passed"], check["check"])
 
 
 if __name__ == "__main__":
