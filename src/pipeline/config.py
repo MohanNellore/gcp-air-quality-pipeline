@@ -27,7 +27,3 @@ class Settings:
             bq_location=os.getenv("BQ_LOCATION", "US"),
             gcs_bucket=os.getenv("GCS_BUCKET", ""),
         )
-
-    @property
-    def table_id(self) -> str:
-        return f"{self.project_id}.{self.bq_dataset}.{self.bq_table}"
