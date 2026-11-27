@@ -59,6 +59,10 @@ If a data-quality check fails, the job stops with an error, nothing is written t
 
 ### Screenshots from my Google Cloud run
 
+**Dataproc Serverless job** (PySpark, succeeded in 2 min 22 sec, about 0.24 DCU-hours):
+
+![Dataproc Serverless job succeeded](images/dataproc-job-succeeded.png)
+
 **Cloud Storage bucket (data lake)** with the `raw/`, `code/`, `processed/` and `reports/` folders:
 
 ![Cloud Storage bucket with raw, code, processed and reports folders](images/gcs-bucket.png)

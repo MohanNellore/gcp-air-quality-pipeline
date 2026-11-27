@@ -87,7 +87,7 @@ ORDER BY avg_pm25 DESC;
 ```
 Some rows have empty PM2.5, PM10 or AQI. That is expected: a value that was missing in the raw file is left empty, and only AQI is calculated from PM2.5 when possible.
 
-**Cost.** Dataproc Serverless bills for the resources used while the job runs. The job page shows the usage (for example about 0.2 DCU-hours for the earlier version of this job). Cloud Storage and BigQuery cost almost nothing at this size. Check **Billing -> Reports** after your first run.
+**Cost.** Dataproc Serverless bills for the resources used while the job runs. The job page shows the usage (my run of the sample file took 2 min 22 sec and used about 0.24 DCU-hours). Cloud Storage and BigQuery cost almost nothing at this size. Check **Billing -> Reports** after your first run.
 
 ## 11. Clean up when you are done
 - Delete the dataset: in BigQuery click the three dots next to `air_quality`, then **Delete**.
