@@ -1,4 +1,0 @@
-# These run on YOUR computer. The Spark job itself runs on Dataproc, which already has Spark.
-google-cloud-bigquery
-google-cloud-storage
-python-dotenv

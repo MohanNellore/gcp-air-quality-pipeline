@@ -1,9 +1,4 @@
-.env
-outputs/
 __pycache__/
 *.pyc
-.venv/
-venv/
-*.json.key
 .DS_Store
-pipeline.zip
+*.json.key

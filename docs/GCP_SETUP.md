@@ -1,137 +1,110 @@
-# Google Cloud setup (step by step)
+# Google Cloud setup and run (step by step, all in the console)
 
-You do this once. Allow about 30 minutes. The Spark job runs on **Dataproc Serverless** in Google Cloud, so you install **no Java, no Spark and no cluster**. On your computer you need only Python and the Google Cloud CLI (`gcloud`). The pipeline handles very little data, so costs are tiny, but always set a budget alert (step 2).
+You do the setup once. Allow about 30 minutes. Everything happens in the Google Cloud console in your browser. You install **nothing** on your computer. The pipeline handles very little data, so costs are tiny, but always set a budget alert (step 2).
+
+Replace `YOUR_PROJECT_ID` and `YOUR_BUCKET` with your own names. Wherever you see `PROJECT_NUMBER`, use your project number (shown on the console home page, in the **Project info** card).
 
 ## 1. Create a project
 1. Go to console.cloud.google.com and sign in.
 2. Click the project picker at the top, then **New project**. Name it, for example, `air-quality-pipeline`.
-3. Note the **Project ID** (it is shown under the name and is usually not the same as the name). You will need it later.
+3. Note the **Project ID** (it is shown under the name and is usually not the same as the name).
 
 ## 2. Set a budget alert (do this first)
-1. Open **Billing** in the left menu and link a billing account to the project. Dataproc Serverless and Cloud Storage both need it (the BigQuery sandbox alone is not enough for this project).
+1. Open **Billing** in the left menu and link a billing account to the project. Dataproc and Cloud Storage need it.
 2. Go to **Budgets & alerts**, click **Create budget**, set a very small amount, and keep the email alerts on.
 
-## 3. Install the Google Cloud CLI and log in
-1. Install it from cloud.google.com/sdk/docs/install and open a **new** terminal. Check it with `gcloud --version`.
-2. Run:
-```bash
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-gcloud auth application-default login
-```
-`gcloud auth login` is used by the `gcloud` commands (the pipeline calls `gcloud` to start the Dataproc job). `gcloud auth application-default login` saves credentials for the Python libraries (Cloud Storage and BigQuery). **You never put a key file in your project.**
+## 3. Enable the APIs
+Go to **APIs & Services -> Library**, then search for each of these and click **Enable**:
+- **Cloud Dataproc API** (runs Spark)
+- **Compute Engine API** (the network Dataproc uses)
+- **BigQuery API**
+- **Cloud Storage** (usually already on)
 
-## 4. Enable the APIs
-```bash
-gcloud services enable dataproc.googleapis.com compute.googleapis.com bigquery.googleapis.com storage.googleapis.com
-```
-Or in the console: **APIs & Services -> Library**, then search for and enable the **Dataproc API** (it runs Spark), the **Compute Engine API** (the network Dataproc uses), the **BigQuery API** and **Cloud Storage**. If you created the project yourself you are its Owner, so you already have the permissions you need to start a job.
+## 4. Create the Cloud Storage bucket
+1. Go to **Cloud Storage -> Buckets -> Create**.
+2. Name it (names must be unique worldwide), for example `yourname-air-quality-lake-123`.
+3. Choose the location type **Multi-region** and **US**. Keep it the same as your BigQuery dataset location.
+4. Click **Create**. In the bucket, create two folders with **Create folder**: `raw` and `code`.
 
-## 5. Create a Cloud Storage bucket
-Dataproc cannot see files on your computer, so the pipeline copies the raw file and the job code into this bucket, and the job reads and writes there. Bucket names must be globally unique, for example `yourname-air-quality-lake-123`.
-```bash
-gcloud storage buckets create gs://YOUR_BUCKET_NAME --location=US
-```
-You can also do this in the console under **Cloud Storage -> Buckets -> Create**. Keep the location the same as `BQ_LOCATION` (default `US`).
+## 5. Turn on Private Google Access
+A Dataproc Serverless job runs on workers without public addresses, so the network must let them reach Google services (Cloud Storage, BigQuery).
+1. Search for **VPC networks** and open it. Click the network **default**.
+2. If there is no `default` network, wait a minute and refresh. If it is still missing, click **Create VPC network**, name it `default`, set **Subnet creation mode** to **Automatic**, tick the firewall rule that ends with **allow-internal**, and click **Create**.
+3. Open the **Subnets** tab and click the subnet in the region you use (for example `us-central1`).
+4. Click **Edit**, set **Private Google Access** to **On**, and click **Save**.
 
-## 6. Prepare the network and the permissions for Dataproc
-Two things must be right before the first job, or it fails while starting.
+## 6. Give the job's service account its permissions
+The job runs as the project's *default Compute Engine service account*, `PROJECT_NUMBER-compute@developer.gserviceaccount.com`.
 
-**a) Private Google Access on the network.** A Dataproc Serverless job runs on workers without public addresses, so the subnet must allow them to reach Google services (Cloud Storage, BigQuery). For the `default` network in your region:
-```bash
-gcloud compute networks subnets update default --region=us-central1 --enable-private-ip-google-access
-```
-Use your own region if you changed `DATAPROC_REGION`.
+**On the project:** go to **IAM & Admin -> IAM**, tick **Include Google-provided role grants**, click the pencil icon on that account, and add these three roles (**Add another role** for each):
+- **Dataproc Worker**
+- **BigQuery Data Editor**
+- **BigQuery Job User**
 
-**b) The job's service account must reach your bucket.** The job runs as the project's *default Compute Engine service account*, `PROJECT_NUMBER-compute@developer.gserviceaccount.com`. Get your project number with:
-```bash
-gcloud projects describe YOUR_PROJECT_ID --format="value(projectNumber)"
-```
-Then give that account two roles:
-```bash
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role="roles/dataproc.worker"
-gcloud storage buckets add-iam-policy-binding gs://YOUR_BUCKET_NAME --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" --role="roles/storage.objectAdmin"
-```
-In the console this is **IAM & Admin -> IAM**, find that account (tick "Include Google-provided role grants" if it is not listed) and add **Dataproc Worker**, and on the bucket (**Permissions** tab) add **Storage Object Admin**.
+**On the bucket:** open **Cloud Storage -> Buckets -> YOUR_BUCKET -> Permissions -> Grant access**. In **New principals** paste the same address (`PROJECT_NUMBER-compute@developer.gserviceaccount.com`), choose the role **Storage Object Admin**, and click **Save**.
 
-**c) Your own account.** As the project Owner you can already submit jobs. If you use another account, it needs **Dataproc Editor** and **Service Account User** on the project.
+Your own account needs no extra roles if you created the project (you are the Owner). Any other account needs **Dataproc Editor** and **Service Account User**.
 
-If your organization blocks the `default` network or its default service account, ask your administrator or use your own network and service account. That is outside this guide.
+## 7. Create the BigQuery dataset
+1. Open **BigQuery**. In the Explorer panel click the three dots next to your project, then **Create dataset**.
+2. Dataset ID: `air_quality`. Location: **US** (the same as the bucket). Click **Create dataset**.
 
-## 7. Configure the project
-```bash
-copy .env.example .env      # Mac/Linux: cp .env.example .env
-```
-Open `.env` and fill in:
-```
-GCP_PROJECT_ID=your-project-id
-BQ_DATASET=air_quality
-BQ_TABLE=daily_air_quality
-BQ_LOCATION=US
-GCS_BUCKET=your-bucket-name           # required: the raw data, the job code and the results live here
-DATAPROC_REGION=us-central1           # the region where Google runs the job
-DATAPROC_RUNTIME_VERSION=2.3          # the Dataproc Serverless runtime (a Spark version)
-```
+The job creates the table by itself, so you do not create it.
 
-## 8. Run it
-You need Python 3.10 or newer. In the project folder:
-```bash
-python -m venv venv
-venv\Scripts\activate            # Mac/Linux: source venv/bin/activate
-pip install -r requirements.txt
-python run_pipeline.py
-python scripts/compare_with_expected.py
-```
-Expected, step by step:
-- `[1/4] Upload` copies the raw file and the job code to the bucket.
-- `[2/4] Dataproc` starts the batch. Nothing seems to happen for a minute or two while Google prepares Spark. Then the job's own output appears, ending with the data-quality report (4,445 raw rows in, 4,272 clean rows out for the file in the repo).
-- `[3/4] Load` loads BigQuery. `[4/4] Download` saves `outputs/quality_report.json` and `outputs/daily_air_quality_clean.csv`.
-- The last command prints `OK` when the output matches the expected output.
+## 8. Upload the two files
+1. Get the files from GitHub: open the repo, click `air_quality_job.py` and `data/raw/air_quality_raw.csv`, and download each one (the download icon on the file page).
+2. In your bucket open the `raw` folder, click **Upload files**, and choose `air_quality_raw.csv`.
+3. Go back, open the `code` folder, click **Upload files**, and choose `air_quality_job.py`. When you change the code later, upload it again and replace the old one.
 
-If a data-quality check fails, the job stops, nothing is loaded, and `outputs/quality_report.json` shows which check failed.
+## 9. Submit the job
+1. Search for **Dataproc** and open it. In the left menu click **Jobs (and batches)**, then open the **Serverless Spark** tab.
+2. Click the blue **Submit job** button and fill in the form:
 
-**Look at the job in the console.** Open **Dataproc -> Serverless -> Batches** (or search for "batches"). Every run is listed with its ID (`air-quality-DATE-TIME`), its status and its logs. This is the first place to look when something goes wrong. In a terminal:
-```bash
-gcloud dataproc batches list --region=us-central1
-gcloud dataproc batches describe BATCH_ID --region=us-central1
-```
+| Box | Value |
+|---|---|
+| Job ID | `air-quality-1` (lowercase letters, numbers and hyphens; use a new ID for every run) |
+| Runtime profile | Leave the default (`Default service configuration`) |
+| Job type | **PySpark** |
+| Main Python file | `gs://YOUR_BUCKET/code/air_quality_job.py` |
+| Arguments | Four arguments, each in its own box (press Enter after each): `--bucket`, then `YOUR_BUCKET`, then `--table`, then `YOUR_PROJECT_ID.air_quality.daily_air_quality` |
 
-**Cost.** Dataproc Serverless bills for the resources used while the batch runs, which is a few minutes for this data. There is no cluster that stays on. Cloud Storage and BigQuery cost almost nothing at this size. Check the Billing reports after your first run to see the real number.
+3. Leave everything else empty and click **Submit**.
 
-## 9. Check the result in the console
-1. Open **BigQuery**, then in the Explorer panel open your project -> `air_quality` -> `daily_air_quality`.
-2. **Schema** tab: the 14 columns. **Details** tab: you should see *Partitioned by Day on reading_date* and *Clustered by city*. **Preview** tab: sample rows.
-3. Click **Query** and run:
+The job shows **Pending**, then **Running**, then **Succeeded**. It takes a few minutes, and the first minute or two is Google preparing Spark. Click **Refresh** now and then.
+
+To run it again, open the finished job and click **Clone**. Change only the **Job ID** and submit.
+
+## 10. Check the result
+1. **Logs.** Click the job ID, then **Job logs**. The data-quality report is printed there. For the sample file it shows 4,445 raw rows and 4,272 clean rows.
+2. **Bucket.** You should see the folders `raw`, `code`, `processed` and `reports`. `processed/daily_air_quality_clean/` holds the clean CSV (a file starting with `part-`) and `reports/quality_report/` holds the JSON report.
+3. **BigQuery.** Open `air_quality -> daily_air_quality`. The **Details** tab shows *Partitioned by Day on reading_date*, *Clustered by city* and the number of rows (4,272). The **Preview** tab shows sample rows.
+4. **Query it.** Click **Query** and run:
 ```sql
 SELECT city, ROUND(AVG(pm25), 2) AS avg_pm25
 FROM `YOUR_PROJECT_ID.air_quality.daily_air_quality`
 GROUP BY city
 ORDER BY avg_pm25 DESC;
 ```
-4. Open your bucket: you should see `raw/`, `code/`, `processed/` and `reports/`.
-5. Take screenshots of the Batches page, the table details and a query result for your README.
+Some rows have empty PM2.5, PM10 or AQI. That is expected: a value that was missing in the raw file is left empty, and only AQI is calculated from PM2.5 when possible.
 
-## 10. Clean up when you are done
-```bash
-bq rm -r -f -d YOUR_PROJECT_ID:air_quality
-gcloud storage rm --recursive gs://YOUR_BUCKET_NAME
-```
-There is no cluster to delete. Or delete the whole project from **IAM & Admin -> Settings -> Shut down**.
+**Cost.** Dataproc Serverless bills for the resources used while the job runs. The job page shows the usage (for example about 0.2 DCU-hours for the earlier version of this job). Cloud Storage and BigQuery cost almost nothing at this size. Check **Billing -> Reports** after your first run.
+
+## 11. Clean up when you are done
+- Delete the dataset: in BigQuery click the three dots next to `air_quality`, then **Delete**.
+- Delete the bucket: **Cloud Storage -> Buckets**, tick the bucket, **Delete**.
+- There is no cluster to delete. Or delete the whole project from **IAM & Admin -> Settings -> Shut down**.
 
 ## Common problems
 | Error | Fix |
 |---|---|
-| `The gcloud command was not found` | Install it (step 3) and open a **new** terminal so the `gcloud` command is found |
-| `API [dataproc.googleapis.com] not enabled` | Enable the Dataproc API (step 4) and wait a minute |
-| `Permission ... dataproc.batches.create denied` or `iam.serviceAccounts.actAs` | Your account needs **Dataproc Editor** and **Service Account User** on the project (step 6c) |
-| The batch fails at start with a message about the **subnet**, **network** or **Private Google Access** | Run the `gcloud compute networks subnets update ... --enable-private-ip-google-access` command in step 6a, then run again |
-| The job starts, then fails reading or writing `gs://` (permission denied, 403) | The default Compute Engine service account lacks the roles in step 6b |
-| `Batch ... already exists` | Each run gets a new ID from the date and time. Wait a second and run again |
-| The job failed and you do not know why | Open Dataproc -> Serverless -> Batches, click the batch ID and read the logs. Or run `gcloud dataproc batches describe BATCH_ID --region=YOUR_REGION` |
-| The job fails with `Data quality checks failed` | The data broke a rule. Read `outputs/quality_report.json` (the pipeline saves it even when the job fails) |
-| Runtime version not supported | Dataproc retires old runtime versions. Pick a current one from the Dataproc Serverless release notes and set `DATAPROC_RUNTIME_VERSION` in `.env` |
-| `DefaultCredentialsError` | Run `gcloud auth application-default login` again |
-| `403 ... Access Denied` from BigQuery or Storage | Wrong project ID, or your account lacks permissions on it |
-| `404 Not found: Dataset` or location errors | Keep `BQ_LOCATION` the same everywhere (bucket and dataset) |
-| `Bucket does not exist` or `Set GCS_BUCKET` | Create the bucket (step 5) and set `GCS_BUCKET` in `.env` |
+| `API [dataproc.googleapis.com] not enabled` | Enable the Dataproc API (step 3) and wait a minute |
+| The job fails at start with a message about the **subnet**, **network** or **Private Google Access** | Do step 5, then submit again with a new Job ID |
+| The job starts, then fails reading or writing `gs://` (permission denied, 403) | The service account lacks the roles in step 6 (Dataproc Worker, and Storage Object Admin on the bucket) |
+| `The clean CSV is saved in ..., but loading BigQuery failed` | The clean data is safe in the bucket. Check that the service account has **BigQuery Data Editor** and **BigQuery Job User** (step 6), that the dataset exists (step 7), and that the bucket and dataset are in the same location. Then clone the job and submit again |
+| `Not found: Dataset` | Create the dataset (step 7), or check the `--table` argument |
+| `--table must look like PROJECT.DATASET.TABLE` | The `--table` value needs two dots, for example `my-project.air_quality.daily_air_quality` |
+| `Path does not exist` or `file not found` for the raw file | Upload the CSV to `YOUR_BUCKET/raw/` (step 8), or check the `--bucket` value |
+| `Data quality checks failed` | The data broke a rule. Open `reports/quality_report/` in the bucket, download the `part-` file, and read `quality_checks` |
+| The Job ID is rejected | Use 4 to 63 lowercase letters, numbers and hyphens, and a new ID for every run |
+| Runtime version not supported | Dataproc retires old runtime versions. Pick a current one in the form's runtime profile |
 | Billing required | Link a billing account to the project (step 2) |
