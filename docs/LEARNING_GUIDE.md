@@ -33,14 +33,14 @@ You must be able to explain every step in your own words. Do these in order.
 7. `src/pipeline/dataproc.py`: how the code is packed into a zip and how `gcloud dataproc batches submit` is called.
 8. `src/pipeline/load_gcp.py`: the Cloud Storage and BigQuery calls.
 9. `src/pipeline/pipeline.py` and `run_pipeline.py`: the manager on your computer that does upload -> Dataproc -> BigQuery -> download.
-10. `tests/`: how the rules are proven, and how the order of the steps and the failure case are tested without any cloud.
+10. `scripts/compare_with_expected.py`: how the output is checked against the expected output.
 
 ## 3. Exercises (do at least three, commit each one separately)
 1. **Read the job logs.** Open Dataproc -> Serverless -> Batches, click your batch, and find the driver output. Find the data-quality report in it, and the line where Spark started.
 2. **Break it on purpose.** Add a row with a negative AQI that the cleaning does not remove, or lower a quality limit, and run again. Watch the job fail, the load get skipped, and `outputs/quality_report.json` still appear.
 3. **Use real data.** Download a public city-level air-quality CSV with the same columns, put it in `data/raw/`, and rerun. What new problems appear?
 4. **New SQL.** In the BigQuery console, try a 7-day rolling average: `AVG(pm25) OVER (PARTITION BY city ORDER BY reading_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)`.
-5. **New quality check.** For example, fail if any city has fewer than 300 readings in a year. Add a test.
+5. **New quality check.** For example, fail if any city has fewer than 300 readings in a year.
 6. **Parquet.** Write Parquet with `df.write.parquet(...)` (Spark has this built in) instead of CSV, and load it into BigQuery. Compare file sizes.
 7. **Incremental load.** Load one day of new data into a staging table and `MERGE` it into the main table.
 8. **Schedule it.** Trigger the same Dataproc batch from Cloud Scheduler plus Workflows, or write an Airflow DAG for Cloud Composer (it has an operator for Dataproc Serverless batches).
@@ -55,7 +55,7 @@ You must be able to explain every step in your own words. Do these in order.
 5. **How do you handle bad data?** Documented cleaning rules that each count what they change, a quality gate that stops the load on failure, and a JSON report that is written even when the gate fails.
 6. **Why an explicit schema?** Auto-detection can guess wrong, for example reading a column with blanks as a string.
 7. **How does authentication work?** Two identities. My own login (`gcloud auth login` and Application Default Credentials) is used by my computer to upload, submit the job and load BigQuery. The Dataproc batch runs as a service account (the default Compute Engine one), which needs Dataproc Worker and access to the bucket. No key files in the repo. In production I would use a dedicated service account with minimal roles.
-8. **How did you test it?** The plain-Python rules, the Dataproc command and zip, and the order of the pipeline steps and its failure handling are unit-tested without any cloud, using stand-ins for Google. The Spark cleaning code is checked on the real Dataproc run: `compare_with_expected.py` compares every output cell with the expected output. I also confirm the real load in the BigQuery console.
+8. **How did you test it?** I ran the real job on Dataproc and checked the results: BigQuery held 4,272 rows, and the counts of empty values (126 PM2.5, 43 PM10, 2 AQI) matched the expected numbers. The job also has a data-quality gate that stops bad data before it is written, and I confirmed the load in the BigQuery console. The repo has `compare_with_expected.py`, which compares every cell with the expected output (say you ran it only after you have). A next step would be unit tests for the cleaning rules, which need Spark with Java.
 9. **How would you schedule it?** Cloud Scheduler calling Workflows to start the Dataproc batch, or an Airflow DAG on Cloud Composer. Right now I run it on demand with one command.
 10. **How would you scale it?** The job already runs on Spark in Google Cloud and reads and writes `gs://` paths. For more data I would give the batch more resources, write Parquet instead of one CSV (drop `coalesce(1)`), and load incrementally with `MERGE`. Dataflow (Apache Beam) is the option for streaming data.
 11. **How do you control BigQuery cost?** Filter on the partition column, select only needed columns, avoid `SELECT *`, and set budget alerts.
@@ -73,7 +73,7 @@ You must be able to explain every step in your own words. Do these in order.
 ## 5. Resume bullets (use only after you have run it on Google Cloud)
 - Built an end-to-end batch data pipeline in Python and PySpark on Google Cloud: a Dataproc Serverless job cleans and validates raw city air-quality data with Spark DataFrames (date parsing, window-function deduplication, outlier handling, standardisation) and enforces a data-quality gate with a JSON report.
 - Staged raw and processed files in Cloud Storage and loaded them into BigQuery (partitioned by date, clustered by city, explicit schema, idempotent loads), with the PySpark code packaged as a zip and submitted to Dataproc Serverless.
-- Added unit tests (including a comparison of the Spark output with a reference output) and handled job-failure paths so bad data never reaches the warehouse.
+- Added a data-quality gate that stops the job before any bad data is written, and checked the results (row counts and counts of empty values) against the expected numbers.
 
 Say "synthetic sample data" if an interviewer asks. If you use a real dataset, name it. Only claim what you have really run. You have run the Dataproc job from the console. The one-command run (`python run_pipeline.py`, which needs the gcloud CLI on your PC) is a separate path: describe it as built, and say it was tested only after you have run it yourself.
 

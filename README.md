@@ -25,7 +25,7 @@ your computer:  python run_pipeline.py
 ```
 
 ## Skills shown
-PySpark ETL on Dataproc Serverless (DataFrames, window functions, lazy evaluation) · submitting and monitoring a Spark batch job · data cleaning and validation · data-quality gate · Google Cloud Storage as a data lake · BigQuery (partitioning, clustering, explicit schema, idempotent loads) · configuration through environment variables · unit tests · Git
+PySpark ETL on Dataproc Serverless (DataFrames, window functions, lazy evaluation) · submitting and monitoring a Spark batch job · data cleaning and validation · data-quality gate · Google Cloud Storage as a data lake · BigQuery (partitioning, clustering, explicit schema, idempotent loads) · configuration through environment variables · Git
 
 ## Project structure
 ```
@@ -46,7 +46,7 @@ PySpark ETL on Dataproc Serverless (DataFrames, window functions, lazy evaluatio
 ├── scripts/generate_sample_data.py   # plain Python (no Spark needed)
 ├── scripts/compare_with_expected.py  # checks the output against the expected output
 ├── data/raw/air_quality_raw.csv # SYNTHETIC sample data with deliberate problems
-├── tests/                       # unit tests (+ expected/ = the expected clean output to compare with)
+├── tests/expected/              # the expected clean output that compare_with_expected.py checks against
 └── docs/                        # GCP_SETUP.md, LEARNING_GUIDE.md
 ```
 
@@ -75,12 +75,6 @@ What happens:
 4. A copy of the clean CSV and `quality_report.json` are saved in `outputs/` on your computer.
 
 `compare_with_expected.py` checks that the output matches the expected results saved in `tests/expected/`, cell by cell. Open the BigQuery console to see the `air_quality.daily_air_quality` table, partitioned by `reading_date` and clustered by `city`. Every batch is also listed in the console under Dataproc -> Serverless -> Batches, with its logs.
-
-### Tests
-```bash
-python -m unittest discover -s tests -v
-```
-The tests cover the plain-Python rules, the Dataproc command and zip, and the pipeline order and failure handling. They need no Spark, no Java and no Google account. The Spark cleaning code is checked by the real Dataproc run followed by `python scripts/compare_with_expected.py`, which compares every output cell with the expected output.
 
 ### Screenshots from my Google Cloud run
 I ran the Spark job by submitting it by hand in the Google Cloud console (Dataproc -> Jobs -> Serverless Spark), with the same files and arguments that `run_pipeline.py` uses, and then loaded BigQuery from the console.
